@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { TopBar } from "../components/TopBar";
+import { Button } from "../components/Button";
 
 type TemplateMeta = {
   name: string;
@@ -9,9 +11,16 @@ type TemplateMeta = {
   pipelines: number;
   fields: number;
   activity_types: number;
+  saved_filters?: number;
 };
 
 type LogLine = { type: "log" | "error" | "done"; msg?: string; created?: number; skipped?: number };
+
+const logTypeStyle: Record<string, { color: string }> = {
+  log: { color: "#9e9e9e" },
+  error: { color: "#e63b3b" },
+  done: { color: "#25c466" },
+};
 
 export default function ClonePage() {
   const [templates, setTemplates] = useState<TemplateMeta[]>([]);
@@ -24,15 +33,11 @@ export default function ClonePage() {
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch("/api/templates")
-      .then((r) => r.json())
-      .then(setTemplates);
+    fetch("/api/templates").then((response) => response.json()).then(setTemplates);
   }, []);
 
   useEffect(() => {
-    if (logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [log]);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -40,17 +45,14 @@ export default function ClonePage() {
     setLog([]);
     setDone(false);
     setRunning(true);
-
     const res = await fetch("/api/clone", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ token, domain, templateName: selected }),
     });
-
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-
     while (true) {
       const { done: streamDone, value } = await reader.read();
       if (streamDone) break;
@@ -64,111 +66,179 @@ export default function ClonePage() {
         if (json.type === "done") setDone(true);
       }
     }
-
     setRunning(false);
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-2">
-        <Link href="/" className="text-gray-400 hover:text-gray-700 text-sm">← Início</Link>
-      </div>
+    <>
+      <TopBar title="Clonar para Cliente" />
+      <div style={{ padding: "28px 24px", maxWidth: 560 }}>
+        <p style={{ fontSize: 13, color: "var(--fg-secondary)", marginBottom: 24 }}>
+          Selecione um template e replique a estrutura na conta do cliente.
+        </p>
 
-      <h1 className="text-xl font-bold">Clonar para Cliente</h1>
+        {templates.length === 0 ? (
+          <div
+            style={{
+              background: "#fff7e8",
+              border: "1px solid #fde8c0",
+              borderRadius: 6,
+              padding: "14px 16px",
+              fontSize: 13,
+              color: "#d9891a",
+            }}
+          >
+            Nenhum template salvo ainda.{" "}
+            <Link href="/export" style={{ color: "#2b8fd8", fontWeight: 500 }}>
+              Exporte um primeiro.
+            </Link>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="pm-card" style={{ padding: 24 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <Field label="Template">
+                <select
+                  className="pm-input"
+                  value={selected}
+                  onChange={(e) => setSelected(e.target.value)}
+                  required
+                >
+                  <option value="">Selecione...</option>
+                  {templates.map((template) => (
+                    <option key={template.name} value={template.name}>
+                      {template.name} - {template.pipelines} pipelines - {template.fields} campos -{" "}
+                      {template.saved_filters ?? 0} filtros
+                    </option>
+                  ))}
+                </select>
+              </Field>
 
-      {templates.length === 0 ? (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-5 text-sm text-yellow-800">
-          Nenhum template salvo ainda.{" "}
-          <Link href="/export" className="underline">Exporte um primeiro.</Link>
-        </div>
-      ) : (
-        <form onSubmit={handleSubmit} className="bg-white border rounded-xl p-6 space-y-4">
-          <div className="space-y-1">
-            <label className="text-sm font-medium text-gray-700">Template</label>
-            <select
-              className="input"
-              value={selected}
-              onChange={(e) => setSelected(e.target.value)}
-              required
+              <Field label="API Token do cliente">
+                <input
+                  type="password"
+                  className="pm-input"
+                  placeholder="Token da conta destino"
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  required
+                />
+              </Field>
+
+              <Field label="Domínio do cliente">
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input
+                    type="text"
+                    className="pm-input"
+                    placeholder="clientedominio"
+                    value={domain}
+                    onChange={(e) => setDomain(e.target.value)}
+                    required
+                  />
+                  <span style={{ fontSize: 12, color: "var(--fg-muted)", whiteSpace: "nowrap" }}>
+                    .pipedrive.com
+                  </span>
+                </div>
+              </Field>
+
+              <Button
+                variant="primary"
+                type="submit"
+                disabled={running}
+                style={{ width: "100%", justifyContent: "center" }}
+              >
+                {running ? "Clonando..." : "Iniciar Clone"}
+              </Button>
+            </div>
+          </form>
+        )}
+
+        {log.length > 0 && (
+          <div style={{ marginTop: 16, background: "#1a1a1a", borderRadius: 8, overflow: "hidden" }}>
+            <div
+              style={{
+                padding: "10px 14px",
+                borderBottom: "1px solid #2a2a2a",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
             >
-              <option value="">Selecione...</option>
-              {templates.map((t) => (
-                <option key={t.name} value={t.name}>
-                  {t.name} — {t.pipelines} pipelines · {t.fields} campos ·{" "}
-                  {t.activity_types} atividades
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-sm font-medium text-gray-700">API Token do cliente</label>
-            <input
-              type="password"
-              className="input"
-              placeholder="Token da conta destino"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              required
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-sm font-medium text-gray-700">Domínio do cliente</label>
-            <div className="flex items-center gap-1">
-              <input
-                type="text"
-                className="input"
-                placeholder="clientedominio"
-                value={domain}
-                onChange={(e) => setDomain(e.target.value)}
-                required
+              <span
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  background: running ? "#f5a623" : done ? "#25c466" : "#9e9e9e",
+                  flexShrink: 0,
+                }}
               />
-              <span className="text-gray-400 text-sm whitespace-nowrap">.pipedrive.com</span>
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "#666",
+                  fontFamily: "var(--font-mono)",
+                }}
+              >
+                {running ? "em execução..." : done ? "concluído" : "parado"}
+              </span>
+            </div>
+            <div
+              ref={logRef}
+              style={{
+                height: 240,
+                overflowY: "auto",
+                padding: "12px 14px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+              }}
+            >
+              {log.map((line, index) => (
+                <div
+                  key={index}
+                  style={{
+                    fontSize: 12,
+                    fontFamily: "var(--font-mono)",
+                    color: logTypeStyle[line.type]?.color ?? "#9e9e9e",
+                    lineHeight: 1.6,
+                  }}
+                >
+                  {line.type === "done"
+                    ? `OK clone concluído - ${line.created} criados, ${line.skipped} ignorados`
+                    : line.msg}
+                </div>
+              ))}
             </div>
           </div>
+        )}
 
-          <button
-            type="submit"
-            disabled={running}
-            className="w-full bg-green-600 text-white py-2 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 transition"
-          >
-            {running ? "Clonando..." : "Iniciar Clone"}
-          </button>
-        </form>
-      )}
-
-      {log.length > 0 && (
-        <div className="bg-gray-900 rounded-xl p-4 text-sm font-mono">
+        {done && (
           <div
-            ref={logRef}
-            className="h-64 overflow-y-auto space-y-1"
+            style={{
+              marginTop: 12,
+              background: "#edfbf3",
+              border: "1px solid #a1ebc5",
+              borderRadius: 6,
+              padding: "12px 14px",
+              fontSize: 13,
+              color: "#148a43",
+              fontWeight: 500,
+            }}
           >
-            {log.map((line, i) => (
-              <div
-                key={i}
-                className={
-                  line.type === "error"
-                    ? "text-red-400"
-                    : line.type === "done"
-                    ? "text-green-400 font-semibold"
-                    : "text-gray-300"
-                }
-              >
-                {line.type === "done"
-                  ? `✓ Clone concluído: ${line.created} criados, ${line.skipped} ignorados`
-                  : line.msg}
-              </div>
-            ))}
+            Clone finalizado com sucesso.
           </div>
-        </div>
-      )}
+        )}
+      </div>
+    </>
+  );
+}
 
-      {done && (
-        <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-green-800 text-sm font-medium">
-          Clone finalizado com sucesso.
-        </div>
-      )}
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="pm-label">{label}</label>
+      {children}
     </div>
   );
 }

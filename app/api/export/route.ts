@@ -1,21 +1,26 @@
-import { NextRequest, NextResponse } from "next/server";
-import { writeFile, mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { PipedriveClient } from "@/pipedrive/client";
-import { exportTemplate } from "@/exporter";
+import { NextRequest, NextResponse } from "next/server";
+import { applyExportSelection, type ExportSelection } from "@/exporter";
+import { Template } from "@/template/schema";
 
 export async function POST(req: NextRequest) {
-  const { token, domain, name } = await req.json();
+  const { name, template: rawTemplate, selection } = await req.json();
 
-  if (!token || !domain || !name) {
-    return NextResponse.json({ error: "token, domain e name são obrigatórios" }, { status: 400 });
+  if (!name || !rawTemplate || !selection) {
+    return NextResponse.json(
+      { error: "name, template e selection são obrigatórios" },
+      { status: 400 },
+    );
   }
 
   const safeName = name.replace(/[^a-z0-9-_]/gi, "_").slice(0, 60);
 
   try {
-    const client = new PipedriveClient({ apiToken: token, domain });
-    const template = await exportTemplate(client);
+    const template = applyExportSelection(
+      Template.parse(rawTemplate),
+      selection as ExportSelection,
+    );
 
     const dir = join(process.cwd(), "templates");
     await mkdir(dir, { recursive: true });
@@ -26,9 +31,11 @@ export async function POST(req: NextRequest) {
       pipelines: template.pipelines.length,
       fields: Object.values(template.custom_fields).flat().length,
       activity_types: template.activity_types.length,
+      lead_labels: template.lead_labels.length,
+      saved_filters: template.saved_filters.length,
     });
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

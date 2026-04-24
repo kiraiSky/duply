@@ -5,7 +5,6 @@ import { PipedriveClient } from "@/pipedrive/client";
 import { Template } from "@/template/schema";
 import type { CloneReport } from "@/cloner";
 
-// Streams progress via SSE so a UI can show a live log.
 export async function POST(req: NextRequest) {
   const { token, domain, templateName } = await req.json();
 
@@ -27,23 +26,16 @@ export async function POST(req: NextRequest) {
         send({ type: "log", msg: `Conectando a ${domain}.pipedrive.com...` });
         const client = new PipedriveClient({ apiToken: token, domain });
 
-        // Import inline with progress events
-        const { cloneTemplate } = await import("@/cloner");
-
         send({ type: "log", msg: "Iniciando clonagem..." });
-        const { report }: { report: CloneReport } = await cloneWithProgress(
-          client,
-          template,
-          send,
-        );
+        const { report }: { report: CloneReport } = await cloneWithProgress(client, template, send);
 
         send({
           type: "done",
           created: report.created.length,
           skipped: report.skipped.length,
         });
-      } catch (e: unknown) {
-        send({ type: "error", msg: e instanceof Error ? e.message : String(e) });
+      } catch (error: unknown) {
+        send({ type: "error", msg: error instanceof Error ? error.message : String(error) });
       } finally {
         ctrl.close();
       }
@@ -66,12 +58,14 @@ async function cloneWithProgress(
 ): Promise<{ report: CloneReport }> {
   const { cloneTemplate } = await import("@/cloner");
 
-  // Patch to emit progress. We run the real cloner but emit step logs.
   send({ type: "log", msg: `Criando ${template.pipelines.length} pipeline(s)...` });
   const result = await cloneTemplate(client, template);
 
   for (const item of result.report.created) {
-    send({ type: "log", msg: `✓ ${item.kind} "${item.ref}" (id ${item.id})` });
+    send({ type: "log", msg: `OK ${item.kind} "${item.ref}" (id ${item.id})` });
+  }
+  for (const item of result.report.skipped) {
+    send({ type: "log", msg: `- ${item.kind} "${item.ref}" ignorado: ${item.reason}` });
   }
 
   return result;
