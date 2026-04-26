@@ -112,6 +112,7 @@ Or use the web UI at `/clone`.
 - [ ] Admin panel to manage client accounts
 
 ### Backlog
+- [ ] Improve custom field group export fidelity — resolve `field_group_id` to real group name in all accounts (avoid fallback labels like `Grupo 4`)
 - [ ] HubSpot and Salesforce support
 - [ ] Scheduled re-sync — keep client accounts in sync with the template on a schedule
 - [ ] Diff view — show what changed between template and client account before applying
