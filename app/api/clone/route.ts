@@ -3,10 +3,11 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { PipedriveClient } from "@/pipedrive/client";
 import { Template } from "@/template/schema";
+import { applyExportSelection, type ExportSelection } from "@/exporter";
 import type { CloneReport } from "@/cloner";
 
 export async function POST(req: NextRequest) {
-  const { token, domain, templateName } = await req.json();
+  const { token, domain, templateName, selection } = await req.json();
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -23,11 +24,19 @@ export async function POST(req: NextRequest) {
         );
         const template = Template.parse(raw);
 
+        const filteredTemplate = selection
+          ? applyExportSelection(template, selection as ExportSelection)
+          : template;
+
         send({ type: "log", msg: `Conectando a ${domain}.pipedrive.com...` });
         const client = new PipedriveClient({ apiToken: token, domain });
 
         send({ type: "log", msg: "Iniciando clonagem..." });
-        const { report }: { report: CloneReport } = await cloneWithProgress(client, template, send);
+        const { report }: { report: CloneReport } = await cloneWithProgress(
+          client,
+          filteredTemplate,
+          send,
+        );
 
         send({
           type: "done",
