@@ -3,11 +3,11 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { PipedriveClient } from "@/pipedrive/client";
 import { Template } from "@/template/schema";
+import { applyExportSelection, type ExportSelection } from "@/exporter";
 import type { CloneReport } from "@/cloner";
 
-// Streams progress via SSE so a UI can show a live log.
 export async function POST(req: NextRequest) {
-  const { token, domain, templateName } = await req.json();
+  const { token, domain, templateName, selection } = await req.json();
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -24,16 +24,17 @@ export async function POST(req: NextRequest) {
         );
         const template = Template.parse(raw);
 
+        const filteredTemplate = selection
+          ? applyExportSelection(template, selection as ExportSelection)
+          : template;
+
         send({ type: "log", msg: `Conectando a ${domain}.pipedrive.com...` });
         const client = new PipedriveClient({ apiToken: token, domain });
-
-        // Import inline with progress events
-        const { cloneTemplate } = await import("@/cloner");
 
         send({ type: "log", msg: "Iniciando clonagem..." });
         const { report }: { report: CloneReport } = await cloneWithProgress(
           client,
-          template,
+          filteredTemplate,
           send,
         );
 
@@ -42,8 +43,8 @@ export async function POST(req: NextRequest) {
           created: report.created.length,
           skipped: report.skipped.length,
         });
-      } catch (e: unknown) {
-        send({ type: "error", msg: e instanceof Error ? e.message : String(e) });
+      } catch (error: unknown) {
+        send({ type: "error", msg: error instanceof Error ? error.message : String(error) });
       } finally {
         ctrl.close();
       }
@@ -66,12 +67,14 @@ async function cloneWithProgress(
 ): Promise<{ report: CloneReport }> {
   const { cloneTemplate } = await import("@/cloner");
 
-  // Patch to emit progress. We run the real cloner but emit step logs.
   send({ type: "log", msg: `Criando ${template.pipelines.length} pipeline(s)...` });
   const result = await cloneTemplate(client, template);
 
   for (const item of result.report.created) {
-    send({ type: "log", msg: `✓ ${item.kind} "${item.ref}" (id ${item.id})` });
+    send({ type: "log", msg: `OK ${item.kind} "${item.ref}" (id ${item.id})` });
+  }
+  for (const item of result.report.skipped) {
+    send({ type: "log", msg: `- ${item.kind} "${item.ref}" ignorado: ${item.reason}` });
   }
 
   return result;

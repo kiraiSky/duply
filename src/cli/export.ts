@@ -23,7 +23,8 @@ async function main() {
   console.log(
     `  ${template.pipelines.length} pipelines, ` +
       `${Object.values(template.custom_fields).flat().length} campos customizados, ` +
-      `${template.activity_types.length} tipos de atividade`,
+      `${template.activity_types.length} tipos de atividade, ` +
+      `${template.saved_filters.length} filtros salvos`,
   );
 }
 

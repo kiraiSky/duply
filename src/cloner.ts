@@ -1,25 +1,29 @@
-import { PipedriveClient } from "./pipedrive/client.js";
-import type { Template, TemplateCustomField } from "./template/schema.js";
+import { createSavedFilters } from "./filters";
+import { PipedriveClient } from "./pipedrive/client";
+import type { Template, TemplateCustomField } from "./template/schema";
 
-type Entity = "deal" | "person" | "organization" | "product";
+type Entity = "deal" | "person" | "organization" | "product" | "lead";
 
 const FIELD_ENDPOINT: Record<Entity, string> = {
   deal: "/dealFields",
   person: "/personFields",
   organization: "/organizationFields",
   product: "/productFields",
+  lead: "/leadFields",
 };
 
 export type CloneContext = {
   pipelines: Map<string, number>;
   stages: Map<string, number>;
   customFields: Map<string, { id: number; key: string }>;
-  fieldOptions: Map<string, number>; // "<field_ref>.<option_ref>" → new_option_id
+  fieldOptions: Map<string, number>;
   activityTypes: Map<string, number>;
+  leadLabels: Map<string, string>;
+  filters: Map<string, number>;
 };
 
 export type CloneReport = {
-  created: { kind: string; ref: string; id: number }[];
+  created: { kind: string; ref: string; id: number | string }[];
   skipped: { kind: string; ref: string; reason: string }[];
 };
 
@@ -30,6 +34,8 @@ function emptyContext(): CloneContext {
     customFields: new Map(),
     fieldOptions: new Map(),
     activityTypes: new Map(),
+    leadLabels: new Map(),
+    filters: new Map(),
   };
 }
 
@@ -40,46 +46,70 @@ export async function cloneTemplate(
   const ctx = emptyContext();
   const report: CloneReport = { created: [], skipped: [] };
 
-  // 1. Pipelines + 2. Stages
-  for (const p of template.pipelines) {
-    const created = await client.post<any>("/pipelines", {
-      name: p.name,
-      order_nr: p.order_nr,
-      deal_probability: p.deal_probability ? 1 : 0,
+  for (const pipeline of template.pipelines) {
+    const createdPipeline = await client.post<any>("/pipelines", {
+      name: pipeline.name,
+      order_nr: pipeline.order_nr,
+      deal_probability: pipeline.deal_probability ? 1 : 0,
     });
-    ctx.pipelines.set(p.ref, created.id);
-    report.created.push({ kind: "pipeline", ref: p.ref, id: created.id });
+    ctx.pipelines.set(pipeline.ref, createdPipeline.id);
+    report.created.push({ kind: "pipeline", ref: pipeline.ref, id: createdPipeline.id });
 
-    for (const s of p.stages) {
-      const stage = await client.post<any>("/stages", {
-        name: s.name,
-        pipeline_id: created.id,
-        order_nr: s.order_nr,
-        deal_probability: s.deal_probability,
-        rotten_flag: s.rotten_flag ? 1 : 0,
-        rotten_days: s.rotten_days ?? undefined,
+    for (const stage of pipeline.stages) {
+      const createdStage = await client.post<any>("/stages", {
+        name: stage.name,
+        pipeline_id: createdPipeline.id,
+        order_nr: stage.order_nr,
+        deal_probability: stage.deal_probability,
+        rotten_flag: stage.rotten_flag ? 1 : 0,
+        rotten_days: stage.rotten_days ?? undefined,
       });
-      ctx.stages.set(s.ref, stage.id);
-      report.created.push({ kind: "stage", ref: s.ref, id: stage.id });
+      ctx.stages.set(stage.ref, createdStage.id);
+      report.created.push({ kind: "stage", ref: stage.ref, id: createdStage.id });
     }
   }
 
-  // 3. Custom fields por entidade
-  for (const entity of ["deal", "person", "organization", "product"] as Entity[]) {
-    for (const f of template.custom_fields[entity]) {
-      await createField(client, entity, f, ctx, report);
+  for (const entity of ["deal", "person", "organization", "product", "lead"] as Entity[]) {
+    const fields = template.custom_fields[entity] ?? [];
+    for (const field of fields) {
+      await createField(client, entity, field, ctx, report);
     }
   }
 
-  // 4. Activity types
-  for (const a of template.activity_types) {
-    const created = await client.post<any>("/activityTypes", {
-      name: a.name,
-      icon_key: a.icon_key,
-      color: a.color ?? undefined,
+  for (const activityType of template.activity_types) {
+    const createdActivityType = await client.post<any>("/activityTypes", {
+      name: activityType.name,
+      icon_key: activityType.icon_key,
+      color: activityType.color ?? undefined,
     });
-    ctx.activityTypes.set(a.ref, created.id);
-    report.created.push({ kind: "activity_type", ref: a.ref, id: created.id });
+    ctx.activityTypes.set(activityType.ref, createdActivityType.id);
+    report.created.push({
+      kind: "activity_type",
+      ref: activityType.ref,
+      id: createdActivityType.id,
+    });
+  }
+
+  for (const leadLabel of template.lead_labels ?? []) {
+    const createdLeadLabel = await client.post<any>("/leadLabels", {
+      name: leadLabel.name,
+      color: leadLabel.color,
+    });
+    ctx.leadLabels.set(leadLabel.ref, createdLeadLabel.id);
+    report.created.push({ kind: "lead_label", ref: leadLabel.ref, id: createdLeadLabel.id });
+  }
+
+  const savedFilters = await createSavedFilters(client, template.saved_filters ?? [], ctx);
+  for (const createdFilter of savedFilters.created) {
+    ctx.filters.set(createdFilter.ref, createdFilter.id);
+    report.created.push({ kind: "filter", ref: createdFilter.ref, id: createdFilter.id });
+  }
+  for (const skippedFilter of savedFilters.skipped) {
+    report.skipped.push({
+      kind: "filter",
+      ref: skippedFilter.ref,
+      reason: skippedFilter.reason,
+    });
   }
 
   return { ctx, report };
@@ -88,31 +118,31 @@ export async function cloneTemplate(
 async function createField(
   client: PipedriveClient,
   entity: Entity,
-  f: TemplateCustomField,
+  field: TemplateCustomField,
   ctx: CloneContext,
   report: CloneReport,
 ) {
   const body: Record<string, unknown> = {
-    name: f.name,
-    field_type: f.field_type,
-    add_visible_flag: f.add_visible_flag,
+    name: field.name,
+    field_type: field.field_type,
+    add_visible_flag: field.add_visible_flag,
   };
 
-  if (f.options?.length) {
-    // API aceita options como array de { label }; ordem é preservada.
-    body.options = f.options.map((o) => ({ label: o.label }));
+  if (field.mandatory_flag) body.mandatory_flag = true;
+
+  if (field.options?.length) {
+    body.options = field.options.map((option) => ({ label: option.label }));
   }
 
   const created = await client.post<any>(FIELD_ENDPOINT[entity], body);
-  ctx.customFields.set(f.ref, { id: created.id, key: created.key });
-  report.created.push({ kind: `field.${entity}`, ref: f.ref, id: created.id });
+  ctx.customFields.set(field.ref, { id: created.id, key: created.key });
+  report.created.push({ kind: `field.${entity}`, ref: field.ref, id: created.id });
 
-  // Mapear options criadas de volta pelos refs originais, pela ordem.
-  if (f.options?.length && Array.isArray(created.options)) {
-    f.options.forEach((opt, i) => {
-      const newOpt = created.options[i];
-      if (newOpt?.id != null) {
-        ctx.fieldOptions.set(`${f.ref}.${opt.ref}`, newOpt.id);
+  if (field.options?.length && Array.isArray(created.options)) {
+    field.options.forEach((option, index) => {
+      const createdOption = created.options[index];
+      if (createdOption?.id != null) {
+        ctx.fieldOptions.set(`${field.ref}.${option.ref}`, createdOption.id);
       }
     });
   }

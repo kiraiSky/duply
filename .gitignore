@@ -6,3 +6,5 @@ templates/
 .env.local
 .env*.local
 *.log
+.codex/
+tsconfig.tsbuildinfo
